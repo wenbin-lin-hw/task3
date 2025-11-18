@@ -1,221 +1,287 @@
-from controller import Supervisor
-from controller import Keyboard
-from controller import Display
-
-import numpy, struct
-import ga, os
+from controller import Robot, Receiver, Emitter
+import sys, struct, math
+import numpy as np
+import mlp as ntw
 
 
-class SupervisorGA:
-    def __init__(self):
-        # Simulation Parameters
+class Controller:
+    def __init__(self, robot):
+        # Robot Parameters
         # Please, do not change these parameters
+        self.robot = robot
         self.time_step = 32  # ms
-        self.time_experiment = 150  # s
+        self.max_speed = 1  # m/s
 
-        # Initiate Supervisor Module
-        self.supervisor = Supervisor()
-        # Check if the robot node exists in the current world file
-        self.robot_node = self.supervisor.getFromDef("Controller")
-        if self.robot_node is None:
-            sys.stderr.write("No DEF Controller node found in the current world file\n")
-            sys.exit(1)
-        # Get the robots translation and rotation current parameters
-        self.trans_field = self.robot_node.getField("translation")
-        self.rot_field = self.robot_node.getField("rotation")
+        # MLP Parameters and Variables
+        ### Define below the architecture of your MLP network.
+        ### Add the number of neurons for each layer.
+        ### The number of neurons should be in between of 1 to 20.
+        ### Number of hidden layers should be one or two.
+        self.number_input_layer = 11  # 8 proximity + 3 ground sensors
+        # Example with one hidden layers: self.number_hidden_layer = [5]
+        # Example with two hidden layers: self.number_hidden_layer = [7,5]
+        # FILLED: Two hidden layers for feature extraction and decision-making
+        self.number_hidden_layer = [8, 6]
+        self.number_output_layer = 2
 
-        # Check Receiver and Emitter are enabled
-        self.emitter = self.supervisor.getDevice("emitter")
-        self.receiver = self.supervisor.getDevice("receiver")
+        # Create a list with the number of neurons per layer
+        self.number_neuros_per_layer = []
+        self.number_neuros_per_layer.append(self.number_input_layer)
+        self.number_neuros_per_layer.extend(self.number_hidden_layer)
+        self.number_neuros_per_layer.append(self.number_output_layer)
+
+        # Initialize the network
+        self.network = ntw.MLP(self.number_neuros_per_layer)
+        self.inputs = []
+
+        # Calculate the number of weights of your MLP
+        self.number_weights = 0
+        for n in range(1, len(self.number_neuros_per_layer)):
+            if (n == 1):
+                # Input + bias
+                self.number_weights += (self.number_neuros_per_layer[n - 1] + 1) * self.number_neuros_per_layer[n]
+            else:
+                self.number_weights += self.number_neuros_per_layer[n - 1] * self.number_neuros_per_layer[n]
+
+        # Enable Motors
+        self.left_motor = self.robot.getDevice('left wheel motor')
+        self.right_motor = self.robot.getDevice('right wheel motor')
+        self.left_motor.setPosition(float('inf'))
+        self.right_motor.setPosition(float('inf'))
+        self.left_motor.setVelocity(0.0)
+        self.right_motor.setVelocity(0.0)
+        self.velocity_left = 0
+        self.velocity_right = 0
+
+        # Enable Proximity Sensors
+        self.proximity_sensors = []
+        for i in range(8):
+            sensor_name = 'ps' + str(i)
+            self.proximity_sensors.append(self.robot.getDevice(sensor_name))
+            self.proximity_sensors[i].enable(self.time_step)
+
+        # Enable Ground Sensors
+        self.left_ir = self.robot.getDevice('gs0')
+        self.left_ir.enable(self.time_step)
+        self.center_ir = self.robot.getDevice('gs1')
+        self.center_ir.enable(self.time_step)
+        self.right_ir = self.robot.getDevice('gs2')
+        self.right_ir.enable(self.time_step)
+
+        # Enable Emitter and Receiver (to communicate with the Supervisor)
+        self.emitter = self.robot.getDevice("emitter")
+        self.receiver = self.robot.getDevice("receiver")
         self.receiver.enable(self.time_step)
-
-        # Initialize the receiver and emitter data to null
         self.receivedData = ""
-        self.receivedWeights = ""
-        self.receivedFitness = ""
-        self.emitterData = ""
+        self.receivedDataPrevious = ""
+        self.flagMessage = False
 
-        ### FILLED: GA Parameters
-        # Number of generations: 50 provides good balance between convergence and time
-        # Training time: ~50 minutes per generation × 50 = ~42 hours total
-        self.num_generations = 50
+        # Fitness value (initialization fitness parameters once)
+        self.fitness_values = []
+        self.fitness = 0
 
-        # Population size: 20 individuals balances exploration and computation time
-        # Larger populations improve diversity but increase training time
-        self.num_population = 20
+    def check_for_new_genes(self):
+        if (self.flagMessage == True):
+            # Split the list based on the number of layers of your network
+            part = []
+            for n in range(1, len(self.number_neuros_per_layer)):
+                if (n == 1):
+                    part.append((self.number_neuros_per_layer[n - 1] + 1) * (self.number_neuros_per_layer[n]))
+                else:
+                    part.append(self.number_neuros_per_layer[n - 1] * self.number_neuros_per_layer[n])
 
-        # Elite individuals: 4 (20% of population) are preserved each generation
-        # Ensures best solutions aren't lost during evolution
-        self.num_elite = 4
+            # Set the weights of the network
+            data = []
+            weightsPart = []
+            sum = 0
+            for n in range(1, len(self.number_neuros_per_layer)):
+                if (n == 1):
+                    weightsPart.append(self.receivedData[n - 1:part[n - 1]])
+                elif (n == (len(self.number_neuros_per_layer) - 1)):
+                    weightsPart.append(self.receivedData[sum:])
+                else:
+                    weightsPart.append(self.receivedData[sum:sum + part[n - 1]])
+                sum += part[n - 1]
+            for n in range(1, len(self.number_neuros_per_layer)):
+                if (n == 1):
+                    weightsPart[n - 1] = weightsPart[n - 1].reshape(
+                        [self.number_neuros_per_layer[n - 1] + 1, self.number_neuros_per_layer[n]])
+                else:
+                    weightsPart[n - 1] = weightsPart[n - 1].reshape(
+                        [self.number_neuros_per_layer[n - 1], self.number_neuros_per_layer[n]])
+                data.append(weightsPart[n - 1])
+            self.network.weights = data
 
-        # size of the genotype variable
-        self.num_weights = 0
+            # Reset fitness list
+            self.fitness_values = []
 
-        # Creating the initial population
-        self.population = []
+    def clip_value(self, value, min_max):
+        if (value > min_max):
+            return min_max;
+        elif (value < -min_max):
+            return -min_max;
+        return value;
 
-        # All Genotypes
-        self.genotypes = []
+    def sense_compute_and_actuate(self):
+        # MLP:
+        #   Input == sensory data
+        #   Output == motors commands
+        output = self.network.propagate_forward(self.inputs)
+        self.velocity_left = output[0]
+        self.velocity_right = output[1]
 
-        # Display: screen to plot the fitness values of the best individual and the average of the entire population
-        self.display = self.supervisor.getDevice("display")
-        self.width = self.display.getWidth()
-        self.height = self.display.getHeight()
-        self.prev_best_fitness = 0.0;
-        self.prev_average_fitness = 0.0;
-        self.display.drawText("Fitness (Best - Red)", 0, 0)
-        self.display.drawText("Fitness (Average - Green)", 0, 10)
+        # Multiply the motor values by 3 to increase the velocities
+        self.left_motor.setVelocity(self.velocity_left * 3)
+        self.right_motor.setVelocity(self.velocity_right * 3)
 
-    def createRandomPopulation(self):
-        # Wait until the supervisor receives the size of the genotypes (number of weights)
-        if (self.num_weights > 0):
-            # Define the size of the population
-            pop_size = (self.num_population, self.num_weights)
-            # Create the initial population with random weights
-            self.population = numpy.random.uniform(low=-1.0, high=1.0, size=pop_size)
+    def calculate_fitness(self):
 
-    def handle_receiver(self):
-        while (self.receiver.getQueueLength() > 0):
-            # Webots 2022:
-            # self.receivedData = self.receiver.getData().decode("utf-8")
-            # Webots 2023:
-            self.receivedData = self.receiver.getString()
-            typeMessage = self.receivedData[0:7]
-            # Check Message
-            if (typeMessage == "weights"):
-                self.receivedWeights = self.receivedData[9:len(self.receivedData)]
-                self.num_weights = int(self.receivedWeights)
-            elif (typeMessage == "fitness"):
-                self.receivedFitness = float(self.receivedData[9:len(self.receivedData)])
-            self.receiver.nextPacket()
+        ### FILLED: Fitness function to increase speed and encourage forward movement
+        # Reward forward movement (average wheel velocity)
+        # Range: -3 to +3 (motors are multiplied by 3)
+        forwardFitness = (self.velocity_left + self.velocity_right) / 2.0
+
+        ### FILLED: Fitness function to encourage line following
+        # Reward when center ground sensor detects the line (black = 1, white = 0)
+        # self.inputs[1] is the center ground sensor (normalized 0-1)
+        # Multiply by 2.0 to emphasize importance
+        center = self.inputs[1]
+        followLineFitness = center * 2.0
+
+        ### FILLED: Fitness function to avoid collision
+        # Penalize when front proximity sensors detect obstacles
+        # Front sensors: ps0 (inputs[3]), ps1 (inputs[4]), ps6 (inputs[9]), ps7 (inputs[10])
+        # Higher values = closer obstacles (normalized 0-1)
+        front_obstacle = (self.inputs[3] + self.inputs[4] + self.inputs[9] + self.inputs[10]) / 4.0
+        avoidCollisionFitness = -front_obstacle * 3.0  # Heavy penalty for obstacles
+
+        ### FILLED: Fitness function to avoid spinning behavior
+        # Penalize large differences in wheel velocities (spinning/sharp turns)
+        spinningFitness = -abs(self.velocity_left - self.velocity_right) * 0.5
+
+        ### FILLED: Combined fitness function with weighted components
+        # Weights: followLine (2.0) > avoidCollision (1.5) > forward (1.0) > spinning (0.5)
+        combinedFitness = (
+                forwardFitness * 1.0 +
+                followLineFitness * 2.0 +
+                avoidCollisionFitness * 1.5 +
+                spinningFitness * 0.5
+        )
+
+        self.fitness_values.append(combinedFitness)
+        self.fitness = np.mean(self.fitness_values)
 
     def handle_emitter(self):
-        if (self.num_weights > 0):
-            # Send genotype of an individual
-            string_message = str(self.emitterData)
-            string_message = string_message.encode("utf-8")
-            # print("Supervisor send:", string_message)
-            self.emitter.send(string_message)
+        # Send the self.fitness value to the supervisor
+        data = str(self.number_weights)
+        data = "weights: " + data
+        string_message = str(data)
+        string_message = string_message.encode("utf-8")
+        # print("Robot send:", string_message)
+        self.emitter.send(string_message)
 
-    def run_seconds(self, seconds):
-        # print("Run Simulation")
-        stop = int((seconds * 1000) / self.time_step)
-        iterations = 0
-        while self.supervisor.step(self.time_step) != -1:
+        # Send the self.fitness value to the supervisor
+        data = str(self.fitness)
+        data = "fitness: " + data
+        string_message = str(data)
+        string_message = string_message.encode("utf-8")
+        # print("Robot send fitness:", string_message)
+        self.emitter.send(string_message)
+
+    def handle_receiver(self):
+        if self.receiver.getQueueLength() > 0:
+            while (self.receiver.getQueueLength() > 0):
+                # Adjust the Data to our model
+                # Webots 2022:
+                # self.receivedData = self.receiver.getData().decode("utf-8")
+                # Webots 2023:
+                self.receivedData = self.receiver.getString()
+
+                self.receivedData = self.receivedData[1:-1]
+                self.receivedData = self.receivedData.split()
+                x = np.array(self.receivedData)
+                self.receivedData = x.astype(float)
+                # print("Controller handle receiver data:", self.receivedData)
+                self.receiver.nextPacket()
+
+            # Is it a new Genotype?
+            if (np.array_equal(self.receivedDataPrevious, self.receivedData) == False):
+                self.flagMessage = True
+
+            else:
+                self.flagMessage = False
+
+            self.receivedDataPrevious = self.receivedData
+        else:
+            # print("Controller receiver q is empty")
+            self.flagMessage = False
+
+    def run_robot(self):
+        # Main Loop
+        while self.robot.step(self.time_step) != -1:
+            # This is used to store the current input data from the sensors
+            self.inputs = []
+
+            # Emitter and Receiver
+            # Check if there are messages to be sent or read to/from our Supervisor
             self.handle_emitter()
             self.handle_receiver()
-            if (stop == iterations):
-                break
-            iterations = iterations + 1
 
-    def evaluate_genotype(self, genotype, generation):
-        # Send genotype to robot for evaluation
-        self.emitterData = str(genotype)
+            # Read Ground Sensors
+            left = self.left_ir.getValue()
+            center = self.center_ir.getValue()
+            right = self.right_ir.getValue()
+            # print("Ground Sensors \n    left {} center {} right {}".format(left,center,right))
 
-        # Reset robot position and physics
-        INITIAL_TRANS = [0.47, 0.16, 0]
-        self.trans_field.setSFVec3f(INITIAL_TRANS)
-        INITIAL_ROT = [0, 0, 1, 1.57]
-        self.rot_field.setSFRotation(INITIAL_ROT)
-        self.robot_node.resetPhysics()
+            ### Please adjust the ground sensors values to facilitate learning
+            min_gs = 0
+            max_gs = 1000
 
-        # Evaluation genotype
-        self.run_seconds(self.time_experiment)
+            if (left > max_gs): left = max_gs
+            if (center > max_gs): center = max_gs
+            if (right > max_gs): right = max_gs
+            if (left < min_gs): left = min_gs
+            if (center < min_gs): center = min_gs
+            if (right < min_gs): right = min_gs
 
-        # Measure fitness
-        fitness = self.receivedFitness
-        print("Fitness: {}".format(fitness))
-        current = (generation, genotype, fitness)
-        self.genotypes.append(current)
+            # Normalize the values between 0 and 1 and save data
+            self.inputs.append((left - min_gs) / (max_gs - min_gs))
+            self.inputs.append((center - min_gs) / (max_gs - min_gs))
+            self.inputs.append((right - min_gs) / (max_gs - min_gs))
+            # print("Ground Sensors \n    left {} center {} right {}".format(self.inputs[0],self.inputs[1],self.inputs[2]))
 
-        return fitness
+            # Read Distance Sensors
+            for i in range(8):
+                ### Select the distance sensors that you will use
+                if (i == 0 or i == 1 or i == 2 or i == 3 or i == 4 or i == 5 or i == 6 or i == 7):
+                    temp = self.proximity_sensors[i].getValue()
 
-    def run_demo(self):
-        # Read File
-        genotype = numpy.load("Best.npy")
-        # Send Genotype to controller
-        self.emitterData = str(genotype)
+                    ### Please adjust the distance sensors values to facilitate learning
+                    min_ds = 0
+                    max_ds = 2400
 
-        # Reset robot position and physics
-        INITIAL_TRANS = [0.47, 0.16, 0]
-        self.trans_field.setSFVec3f(INITIAL_TRANS)
-        INITIAL_ROT = [0, 0, 1, 1.57]
-        self.rot_field.setSFRotation(INITIAL_ROT)
-        self.robot_node.resetPhysics()
+                    if (temp > max_ds): temp = max_ds
+                    if (temp < min_ds): temp = min_ds
 
-        # Evaluation genotype
-        self.run_seconds(self.time_experiment)
+                    # Normalize the values between 0 and 1 and save data
+                    self.inputs.append((temp - min_ds) / (max_ds - min_ds))
+                    # print("Distance Sensors - Index: {}  Value: {}".format(i,self.proximity_sensors[i].getValue()))
 
-    def run_optimization(self):
-        # Wait until the number of weights is updated
-        while (self.num_weights == 0):
-            self.handle_receiver()
-            self.createRandomPopulation()
+            # GA Iteration
+            # Verify if there is a new genotype to be used that was sent from Supervisor
+            self.check_for_new_genes()
+            # Define the robot's actuation (motor values) based on the output of the MLP
+            self.sense_compute_and_actuate()
+            # Calculate the fitnes value of the current iteration
+            self.calculate_fitness()
 
-        print("starting GA optimization ...\n")
-
-        # For each Generation
-        for generation in range(self.num_generations):
-            print("Generation: {}".format(generation))
-            current_population = []
-            # Select each Genotype or Individual
-            for population in range(self.num_population):
-                genotype = self.population[population]
-                # Evaluate
-                fitness = self.evaluate_genotype(genotype, generation)
-                # print(fitness)
-                # Save its fitness value
-                current_population.append((genotype, float(fitness)))
-                # print(current_population)
-
-            # After checking the fitness value of all indivuals
-            # Save genotype of the best individual
-            best = ga.getBestGenotype(current_population);
-            average = ga.getAverageGenotype(current_population);
-            numpy.save("Best.npy", best[0])
-            self.plot_fitness(generation, best[1], average);
-
-            # Generate the new population using genetic operators
-            if (generation < self.num_generations - 1):
-                self.population = ga.population_reproduce(current_population, self.num_elite);
-
-        # print("All Genotypes: {}".format(self.genotypes))
-        print("GA optimization terminated.\n")
-
-    def draw_scaled_line(self, generation, y1, y2):
-        # Define the scale of the fitness plot
-        XSCALE = int(self.width / self.num_generations);
-        YSCALE = 100;
-        self.display.drawLine((generation - 1) * XSCALE, self.height - int(y1 * YSCALE), generation * XSCALE,
-                              self.height - int(y2 * YSCALE));
-
-    def plot_fitness(self, generation, best_fitness, average_fitness):
-        if (generation > 0):
-            self.display.setColor(0xff0000);  # red
-            self.draw_scaled_line(generation, self.prev_best_fitness, best_fitness);
-
-            self.display.setColor(0x00ff00);  # green
-            self.draw_scaled_line(generation, self.prev_average_fitness, average_fitness);
-
-        self.prev_best_fitness = best_fitness;
-        self.prev_average_fitness = average_fitness;
+            # End of the iteration
 
 
 if __name__ == "__main__":
-    # Call Supervisor function to initiate the supervisor module
-    gaModel = SupervisorGA()
-
-    # Function used to run the best individual or the GA
-    keyboard = Keyboard()
-    keyboard.enable(50)
-
-    # Interface
-    print("(R|r)un Best Individual or (S|s)earch for New Best Individual:")
-    while gaModel.supervisor.step(gaModel.time_step) != -1:
-        resp = keyboard.getKey()
-        if (resp == 83 or resp == 65619):
-            gaModel.run_optimization()
-            print("(R|r)un Best Individual or (S|s)earch for New Best Individual:")
-        elif (resp == 82 or resp == 65619):
-            gaModel.run_demo()
-            print("(R|r)un Best Individual or (S|s)earch for New Best Individual:")
+    # Call Robot function to initialize the robot
+    my_robot = Robot()
+    # Initialize the parameters of the controller by sending my_robot
+    controller = Controller(my_robot)
+    # Run the controller
+    controller.run_robot()
