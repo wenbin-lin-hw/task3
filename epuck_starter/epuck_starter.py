@@ -135,39 +135,102 @@ class Controller:
         self.right_motor.setVelocity(self.velocity_right * 3)
 
     def calculate_fitness(self):
+        """
+        OPTIMIZED FITNESS FUNCTION v2.0
 
-        ### FILLED: Fitness function to increase speed and encourage forward movement
-        # Reward forward movement (average wheel velocity)
+        Key improvements:
+        1. Strong line following emphasis with off-center penalty
+        2. Context-aware obstacle avoidance (threshold-based)
+        3. Speed bonus when following line correctly
+        4. Permissive spinning penalty for navigation
+
+        Expected fitness range: -10 to +20
+        Good performance: 8-12
+        Excellent performance: 12+
+        """
+
+        # Ground sensors (normalized 0-1)
+        # 0 = white surface (no line), 1 = black surface (line detected)
+        left = self.inputs[0]  # Left ground sensor (gs0)
+        center = self.inputs[1]  # Center ground sensor (gs1) - MOST IMPORTANT
+        right = self.inputs[2]  # Right ground sensor (gs2)
+
+        # Proximity sensors (normalized 0-1)
+        # 0 = no obstacle, 1 = very close obstacle
+        # Front sensors are most important for obstacle avoidance
+        # ps0 = inputs[3], ps1 = inputs[4], ps6 = inputs[9], ps7 = inputs[10]
+        front_obstacle = (self.inputs[3] + self.inputs[4] +
+                          self.inputs[9] + self.inputs[10]) / 4.0
+
+        ### 1. FORWARD FITNESS - Reward speed and forward movement
+        # Encourages robot to move forward rather than backward or stationary
         # Range: -3 to +3 (motors are multiplied by 3)
+        # Positive = forward, Negative = backward
         forwardFitness = (self.velocity_left + self.velocity_right) / 2.0
 
-        ### FILLED: Fitness function to encourage line following
-        # Reward when center ground sensor detects the line (black = 1, white = 0)
-        # self.inputs[1] is the center ground sensor (normalized 0-1)
-        # Multiply by 2.0 to emphasize importance
-        center = self.inputs[1]
-        followLineFitness = center * 2.0
+        ### 2. ENHANCED LINE FOLLOWING FITNESS
+        # Strong reward for center sensor detecting line
+        # Penalty for left/right sensors detecting line (robot is off-center)
+        # This encourages the robot to stay centered on the line
+        # Range: approximately -3 to +4
+        followLineFitness = center * 4.0 - (left + right) * 1.5
 
-        ### FILLED: Fitness function to avoid collision
-        # Penalize when front proximity sensors detect obstacles
-        # Front sensors: ps0 (inputs[3]), ps1 (inputs[4]), ps6 (inputs[9]), ps7 (inputs[10])
-        # Higher values = closer obstacles (normalized 0-1)
-        front_obstacle = (self.inputs[3] + self.inputs[4] + self.inputs[9] + self.inputs[10]) / 4.0
-        avoidCollisionFitness = -front_obstacle * 3.0  # Heavy penalty for obstacles
+        ### 3. SPEED BONUS - Encourage fast movement when on line
+        # Rewards robot for moving quickly when it's correctly following the line
+        # This prevents slow, cautious behavior when on track
+        # Range: 0 to +6
+        if center > 0.5:  # Robot is clearly on the line
+            speedBonus = forwardFitness * 2.0
+        else:  # Robot is off the line or uncertain
+            speedBonus = 0
 
-        ### FILLED: Fitness function to avoid spinning behavior
-        # Penalize large differences in wheel velocities (spinning/sharp turns)
-        spinningFitness = -abs(self.velocity_left - self.velocity_right) * 0.5
+        ### 4. CONTEXT-AWARE COLLISION AVOIDANCE
+        # Uses thresholds to only penalize when obstacles are genuinely close
+        # This prevents the robot from being overly cautious and staying too far from obstacles
+        # Range: -3 to 0
+        if front_obstacle > 0.7:  # Very close to obstacle (danger zone)
+            # Heavy penalty - must avoid immediately
+            avoidCollisionFitness = -(front_obstacle - 0.7) * 10.0
+        elif front_obstacle > 0.4:  # Moderately close (caution zone)
+            # Light penalty - be aware but can navigate
+            avoidCollisionFitness = -(front_obstacle - 0.4) * 2.0
+        else:  # Safe distance (< 0.4)
+            # No penalty - robot can move freely
+            avoidCollisionFitness = 0
 
-        ### FILLED: Combined fitness function with weighted components
-        # Weights: followLine (2.0) > avoidCollision (1.5) > forward (1.0) > spinning (0.5)
+        ### 5. ANTI-SPINNING FITNESS
+        # Penalizes excessive difference in wheel velocities (spinning in place)
+        # But allows reasonable turning for navigation around obstacles
+        # Range: -1.5 to 0
+        speed_diff = abs(self.velocity_left - self.velocity_right)
+        if speed_diff > 2.5:  # Excessive spinning threshold (was 0 before)
+            spinningFitness = -(speed_diff - 2.5) * 1.0
+        else:  # Reasonable turning or straight movement
+            spinningFitness = 0
+
+        ### 6. COMBINED FITNESS with optimized weights
+        # Weight distribution:
+        # - followLineFitness: 3.0x (highest priority - PRIMARY OBJECTIVE)
+        # - speedBonus: 1.0x (encourage fast line following)
+        # - forwardFitness: 1.0x (base movement reward)
+        # - avoidCollisionFitness: 1.0x (safety, but not overly cautious)
+        # - spinningFitness: 0.5x (fine-tuning stability)
+        #
+        # Total expected range: -10 to +20
+        # Poor performance: < 0
+        # Moderate: 0-5
+        # Good: 5-10
+        # Excellent: 10-15
+        # Outstanding: 15+
         combinedFitness = (
-                forwardFitness * 1.0 +
-                followLineFitness * 2.0 +
-                avoidCollisionFitness * 1.5 +
-                spinningFitness * 0.5
+                forwardFitness * 1.0 +  # Base speed reward
+                followLineFitness * 3.0 +  # PRIMARY OBJECTIVE (36% of positive fitness)
+                speedBonus * 1.0 +  # Fast line following bonus
+                avoidCollisionFitness * 1.0 +  # Context-aware safety
+                spinningFitness * 0.5  # Stability fine-tuning
         )
 
+        # Store fitness value and calculate running average
         self.fitness_values.append(combinedFitness)
         self.fitness = np.mean(self.fitness_values)
 
