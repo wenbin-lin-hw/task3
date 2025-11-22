@@ -12,7 +12,7 @@ class ImprovedSupervisorGA:
     def __init__(self):
         # Simulation Parameters
         self.time_step = 32  # ms
-        self.time_experiment = 150  # s
+        self.time_experiment = 200  # s
         
         # Initiate Supervisor Module
         self.supervisor = Supervisor()

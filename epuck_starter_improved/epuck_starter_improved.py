@@ -302,12 +302,12 @@ class Controller:
         # the robot should turn right to avoid collision
         if front_center > OBSTACLE_CLOSE and front_left > OBSTACLE_CLOSE:
             if is_turning_right and not self.is_on_edge:
-                fitness += reward * 1.5
+                fitness += reward * 3.0
                 if self.action_number%100==0:
                     print("Avoiding front-left obstacle by turning RIGHT")
                 # Extra reward if obstacle is very close
                 if front_center > OBSTACLE_VERY_CLOSE:
-                    fitness += reward * 0.5
+                    fitness += reward * 1.0
                     if self.action_number%100==0:
                         print("Very close obstacle in front-left, extra reward for RIGHT turn")
 
