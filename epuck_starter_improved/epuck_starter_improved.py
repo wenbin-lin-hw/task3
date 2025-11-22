@@ -206,17 +206,22 @@ class Controller:
             lost_line_penalty = 1.0  # 完全丢线
 
         # 综合适应度
-        fitness = (line_detection_reward * 0.4 +
-                   correction_reward * 0.3 +
-                   speed_reward * 0.3 -
-                   lost_line_penalty)
+        if self.current_generation < 0.3 * self.num_generations:
+            fitness = (line_detection_reward * 0.4 +
+                       correction_reward * 0.3 +
+                       speed_reward * 0.3 -
+                       lost_line_penalty)
+        else:
+            fitness = (line_detection_reward * 0.6 +
+                       correction_reward * 0.4  -
+                       lost_line_penalty*0.15)
         # if self.real_speed <0.005 and self.is_on_edge:
         #     fitness = 0.0
         if self.is_on_edge :
             fitness = 0.0
 
         if self.real_speed<0.01:
-            fitness-=0.5
+            return 0.0
 
         # if self.real_speed < 0.01 and max(abs(self.velocity_left), abs(self.velocity_right)) > 0.5:
         #     fitness -= 0.2
@@ -228,153 +233,272 @@ class Controller:
 
 
 
+        if self.current_generation<0.3*self.num_generations:
 
-        return max(0, fitness)
+            return max(0, fitness)
+        else:
+            return max(-0.2, fitness)
 
     # ============================================================================
     # FITNESS FUNCTION 3: AVOID COLLISION FITNESS
     # ============================================================================
     def avoidCollisionFitness(self):
-        """
-        避障适应度函数
-
-        目标：使机器人能够检测并避开障碍物
-
-        原理：
-        - e-puck有8个红外接近传感器，分布在机器人周围
-        - 传感器值越高表示障碍物越近
-        - 前方传感器最重要，侧面次之
-        Args:
-            proximity_sensors: 8个接近传感器读数 [ps0-ps7]
-                              ps0, ps1: 右前方
-                              ps2, ps3: 右侧
-                              ps4, ps5: 后方
-                              ps6, ps7: 左侧/左前方
-            left_speed: 左轮速度
-            right_speed: 右轮速度
-            danger_threshold: 危险距离阈值
-
-        Returns:
-            适应度得分 [0, 1]
-
-        设计要点：
-        1. 危险检测：识别前方和侧面的障碍物
-        2. 避障响应：根据障碍物位置调整轮速
-        3. 预防性奖励：保持安全距离
-        4. 惩罚碰撞：传感器值过高严重惩罚
-        """
         sensor_values = []
         for sensor in self.proximity_sensors:
             sensor_values.append(sensor.getValue())
-        proximity_sensors =sensor_values
-        left_speed, right_speed, danger_threshold = self.velocity_left,self.velocity_right,90
-        if len(proximity_sensors) < 8:
+        # proximity_sensors =sensor_values
+        left_speed, right_speed, danger_threshold = self.velocity_left,self.velocity_right,80
+        ps0 = sensor_values[0]
+        ps1 = sensor_values[1]
+        ps2 = sensor_values[2]
+        ps7 =sensor_values[7]
+        ps6= sensor_values[6]
+        ps5= sensor_values[5]
+        front_center = (ps1+ps6)/2
+        front_right = (ps0+ps1)/2
+        front_left = (ps6+ps7)/2
+        right_side = ps2
+        left_side = ps5
+        front_obstacle = (ps0+ps1+ps6+ps7)/4
+        vel_left = self.velocity_left
+        vel_right = self.velocity_right
+        fitness = 0.0
+        reward = 3.0  # Base reward for correct avoidance behavior
+        # if self.action_number%100==0:
+        #     print("ps0-7:",ps0,ps1,ps2,ps5,ps6,ps7,"vel_left:",vel_left,"vel_right:",vel_right)
+
+        # Define thresholds
+        OBSTACLE_CLOSE = 90  # Obstacle is close enough to react
+        OBSTACLE_VERY_CLOSE = 270  # Obstacle is very close (danger zone)
+        SIDE_OBSTACLE = 90  # Side obstacle detection threshold
+        FRONT_CLEAR = 80  # Front is considered clear below this
+
+        # Calculate turning direction
+        # Positive = turning right (right wheel faster)
+        # Negative = turning left (left wheel faster)
+        turn_direction = vel_right - vel_left
+        is_turning_left = turn_direction < -0.3
+        is_turning_right = turn_direction > 0.3
+        is_moving_backward = (vel_left + vel_right) < -0.2
+        is_slight_right_turn = 0.1 < turn_direction < 0.5
+        is_slight_left_turn = -0.5 < turn_direction < -0.1
+
+        ### SCENARIO 1: Front and Right obstacles → Reward LEFT turn
+        # When obstacles are detected in front and to the right,
+        # the robot should turn left to avoid collision
+        if front_center > OBSTACLE_CLOSE and front_right > OBSTACLE_CLOSE:
+            if is_turning_left and not self.is_on_edge:
+                fitness += reward * 1.5
+                if self.action_number%100==0:
+                    print("Avoiding front-right obstacle by turning LEFT")
+                # Extra reward if obstacle is very close
+                if front_center > OBSTACLE_VERY_CLOSE and not self.is_on_edge:
+                    fitness += reward * 0.5
+                    if self.action_number%100==0:
+                        print("Very close obstacle in front-right, extra reward for LEFT turn")
+
+        ### SCENARIO 2: Front and Left obstacles → Reward RIGHT turn
+        # When obstacles are detected in front and to the left,
+        # the robot should turn right to avoid collision
+        if front_center > OBSTACLE_CLOSE and front_left > OBSTACLE_CLOSE:
+            if is_turning_right and not self.is_on_edge:
+                fitness += reward * 1.5
+                if self.action_number%100==0:
+                    print("Avoiding front-left obstacle by turning RIGHT")
+                # Extra reward if obstacle is very close
+                if front_center > OBSTACLE_VERY_CLOSE:
+                    fitness += reward * 0.5
+                    if self.action_number%100==0:
+                        print("Very close obstacle in front-left, extra reward for RIGHT turn")
+
+        ### SCENARIO 3: Very close obstacle (almost collision) → Reward BACKWARD movement
+        # When the robot is about to collide, backing up is the safest option
+        if front_center > OBSTACLE_VERY_CLOSE:
+            if is_moving_backward and not self.is_on_edge:
+                fitness += reward * 2.0
+                if self.action_number%100==0:
+                    print("Very close obstacle ahead, rewarding BACKWARD movement")
+                # Strong reward for backing away from imminent collision
+
+        ### SCENARIO 4: Right side obstacle, front clear → Reward slight RIGHT turn
+        # After avoiding an obstacle on the right, the robot should turn slightly right
+        # to return to the original trajectory (line)
+        if right_side > SIDE_OBSTACLE and front_center < FRONT_CLEAR:
+            if is_slight_right_turn and not self.is_on_edge:
+                fitness += reward * 5.0
+                if self.action_number%100==0:
+                    print("Avoided right side obstacle, rewarding slight RIGHT turn")
+                # This helps the robot return to the line after avoiding obstacle
+
+        ### SCENARIO 5: Left side obstacle, front clear → Reward slight LEFT turn
+        # After avoiding an obstacle on the left, the robot should turn slightly left
+        # to return to the original trajectory (line)
+        if left_side > SIDE_OBSTACLE and front_center < FRONT_CLEAR:
+            if is_slight_left_turn and not self.is_on_edge:
+                fitness += reward * 5.0
+                if self.action_number%100==0:
+                    print("Avoided left side obstacle, rewarding slight LEFT turn")
+                # This helps the robot return to the line after avoiding obstacle
+
+        ### PENALTY: Collision risk
+        # Penalize if moving forward when obstacle is very close
+        if front_center > OBSTACLE_VERY_CLOSE:
+            forward_speed = (vel_left + vel_right) / 2.0
+            if forward_speed > 0.2:  # Moving forward toward obstacle
+                fitness -= reward * 2.0
+                # if self.action_number%100==0:
+                #     print("Penalty for moving FORWARD toward very close obstacle")
+        if self.real_speed < 0.01 and not self.is_on_edge:
+            # if self.action_number%100==0:
+            #     print("real_speed too low...")
             return 0.0
 
-        # 传感器权重（前方最重要）
-        sensor_weights = np.array([
-            0.2,  # ps0 - 右前
-            0.2,  # ps1 - 右前
-            0.1,  # ps2 - 右侧
-            0.05,  # ps3 - 右后侧
-            0.05,  # ps4 - 后方
-            0.05,  # ps5 - 后方
-            0.1,  # ps6 - 左侧
-            0.2  # ps7 - 左前
-        ])
 
-        # 归一化传感器读数 [0, 1]，假设最大值为4096
-        norm_sensors = np.array(proximity_sensors) / 4096.0
-
-        # 计算加权危险程度
-        danger_level = np.sum(norm_sensors * sensor_weights)
-
-        # 检测前方障碍物
-        front_sensors = [proximity_sensors[0], proximity_sensors[1],
-                         proximity_sensors[7]]
-        max_front = max(front_sensors)
-        # print("max_front:",max_front)
-
-        # 碰撞惩罚
-        if max_front > danger_threshold * 3:
-            return 0.0  # 严重碰撞
-
-        # 计算避障得分
-        if max_front < danger_threshold:
-            # 安全距离，高分
-            safety_score = 1.0
-        else:
-            # 有障碍物，根据距离评分
-            safety_score = 1.0 - (max_front - danger_threshold) / (danger_threshold * 2)
-            safety_score = max(0.2, safety_score)
-
-        # 评估避障行为
-        left_obstacle = proximity_sensors[7] > danger_threshold
-        right_obstacle = proximity_sensors[0] > danger_threshold
-
-        avoidance_score = 0.0
-        if left_obstacle and right_speed < left_speed and left_speed-right_speed>1.5:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 1.0
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 1.0:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.7
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.8:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.6
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.6:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.4
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.4:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.3
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.2:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.2
-        elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.1:
-            # 左侧有障碍，应该右转（右轮慢）
-            avoidance_score = 0.1
-        if right_obstacle and left_speed < right_speed and right_speed-left_speed>1.5:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 1.0
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>1.0:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.7
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.8:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.6
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.6:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.4
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.4:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.3
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.2:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.2
-        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.1:
-            # 右侧有障碍，应该左转（左轮慢）
-            avoidance_score = 0.1
-
-        # 鼓励在检测到障碍时减速
-        if max_front > danger_threshold:
-            avg_speed = (abs(left_speed) + abs(right_speed)) / 2.0
-            speed_reduction = 1.0 - min(avg_speed /self.max_speed, 1.0)
-            avoidance_score *= (0.7 + 0.3 * speed_reduction)
-
-        # 综合得分
-        fitness = safety_score * 0.6 + avoidance_score * 4
-        if self.is_on_edge:
-            fitness = 0.0
-        if self.real_speed<0.02 and max(abs(self.velocity_left), abs(self.velocity_right))>0.5:
-            fitness=0.0
-        if abs(self.velocity_right)!=0:
-            if abs(self.velocity_left)/abs(self.velocity_right)>0.8 and self.velocity_right*self.velocity_left<0:
-                fitness=0.0
-        if self.is_on_edge:
-            fitness =0.0
-
-        return max(0.0, fitness)
+        return fitness
+        # """
+        # 避障适应度函数
+        #
+        # 目标：使机器人能够检测并避开障碍物
+        #
+        # 原理：
+        # - e-puck有8个红外接近传感器，分布在机器人周围
+        # - 传感器值越高表示障碍物越近
+        # - 前方传感器最重要，侧面次之
+        # Args:
+        #     proximity_sensors: 8个接近传感器读数 [ps0-ps7]
+        #                       ps0, ps1: 右前方
+        #                       ps2, ps3: 右侧
+        #                       ps4, ps5: 后方
+        #                       ps6, ps7: 左侧/左前方
+        #     left_speed: 左轮速度
+        #     right_speed: 右轮速度
+        #     danger_threshold: 危险距离阈值
+        #
+        # Returns:
+        #     适应度得分 [0, 1]
+        #
+        # 设计要点：
+        # 1. 危险检测：识别前方和侧面的障碍物
+        # 2. 避障响应：根据障碍物位置调整轮速
+        # 3. 预防性奖励：保持安全距离
+        # 4. 惩罚碰撞：传感器值过高严重惩罚
+        # """
+        # sensor_values = []
+        # for sensor in self.proximity_sensors:
+        #     sensor_values.append(sensor.getValue())
+        # proximity_sensors =sensor_values
+        # left_speed, right_speed, danger_threshold = self.velocity_left,self.velocity_right,90
+        # if len(proximity_sensors) < 8:
+        #     return 0.0
+        #
+        # # 传感器权重（前方最重要）
+        # sensor_weights = np.array([
+        #     0.2,  # ps0 - 右前
+        #     0.2,  # ps1 - 右前
+        #     0.1,  # ps2 - 右侧
+        #     0.05,  # ps3 - 右后侧
+        #     0.05,  # ps4 - 后方
+        #     0.05,  # ps5 - 后方
+        #     0.1,  # ps6 - 左侧
+        #     0.2  # ps7 - 左前
+        # ])
+        #
+        # # 归一化传感器读数 [0, 1]，假设最大值为4096
+        # norm_sensors = np.array(proximity_sensors) / 4096.0
+        #
+        # # 计算加权危险程度
+        # danger_level = np.sum(norm_sensors * sensor_weights)
+        #
+        # # 检测前方障碍物
+        # front_sensors = [proximity_sensors[0], proximity_sensors[1],
+        #                  proximity_sensors[7]]
+        # max_front = max(front_sensors)
+        # # print("max_front:",max_front)
+        #
+        # # 碰撞惩罚
+        # if max_front > danger_threshold * 3:
+        #     return 0.0  # 严重碰撞
+        #
+        # # 计算避障得分
+        # if max_front < danger_threshold:
+        #     # 安全距离，高分
+        #     safety_score = 1.0
+        # else:
+        #     # 有障碍物，根据距离评分
+        #     safety_score = 1.0 - (max_front - danger_threshold) / (danger_threshold * 2)
+        #     safety_score = max(0.2, safety_score)
+        #
+        # # 评估避障行为
+        # left_obstacle = proximity_sensors[7] > danger_threshold
+        # right_obstacle = proximity_sensors[0] > danger_threshold
+        #
+        # avoidance_score = 0.0
+        # if left_obstacle and right_speed < left_speed and left_speed-right_speed>1.5:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 1.0
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 1.0:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.7
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.8:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.6
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.6:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.4
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.4:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.3
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.2:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.2
+        # elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.1:
+        #     # 左侧有障碍，应该右转（右轮慢）
+        #     avoidance_score = 0.1
+        # if right_obstacle and left_speed < right_speed and right_speed-left_speed>1.5:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 1.0
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>1.0:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.7
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.8:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.6
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.6:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.4
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.4:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.3
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.2:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.2
+        # elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.1:
+        #     # 右侧有障碍，应该左转（左轮慢）
+        #     avoidance_score = 0.1
+        #
+        # # 鼓励在检测到障碍时减速
+        # if max_front > danger_threshold:
+        #     avg_speed = (abs(left_speed) + abs(right_speed)) / 2.0
+        #     speed_reduction = 1.0 - min(avg_speed /self.max_speed, 1.0)
+        #     avoidance_score *= (0.7 + 0.3 * speed_reduction)
+        #
+        # # 综合得分
+        # if self.current_generation<0.5*self.num_generations:
+        #     fitness = safety_score * 1.0 + avoidance_score * 3
+        # else:
+        #     fitness = safety_score * 1.0 + avoidance_score * 6
+        # if self.is_on_edge:
+        #
+        #     fitness = 0.0
+        # if self.real_speed<0.02 and max(abs(self.velocity_left), abs(self.velocity_right))>0.5:
+        #     fitness=0.0
+        # if abs(self.velocity_right)!=0:
+        #     if abs(self.velocity_left)/abs(self.velocity_right)>0.8 and self.velocity_right*self.velocity_left<0:
+        #         fitness=0.0
+        # if self.is_on_edge:
+        #     fitness =0.0
+        #
+        # return max(0.0, fitness)
 
 
         # return np.clip(fitness, 0.0, 1.0)
