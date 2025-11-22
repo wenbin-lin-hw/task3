@@ -280,8 +280,8 @@ class Controller:
         is_turning_left = turn_direction < -0.3
         is_turning_right = turn_direction > 0.3
         is_moving_backward = (vel_left + vel_right) < -0.2
-        is_slight_right_turn = 0.1 < turn_direction < 0.5
-        is_slight_left_turn = -0.5 < turn_direction < -0.1
+        is_slight_right_turn = 0.3 < turn_direction < 0.8
+        is_slight_left_turn = -0.8 < turn_direction < -0.3
 
         ### SCENARIO 1: Front and Right obstacles → Reward LEFT turn
         # When obstacles are detected in front and to the right,
