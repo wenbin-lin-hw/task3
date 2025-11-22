@@ -277,11 +277,11 @@ class Controller:
         # Positive = turning right (right wheel faster)
         # Negative = turning left (left wheel faster)
         turn_direction = vel_right - vel_left
-        is_turning_left = turn_direction < -0.3
-        is_turning_right = turn_direction > 0.3
+        is_turning_left = turn_direction >0.3
+        is_turning_right = turn_direction < -0.3
         is_moving_backward = (vel_left + vel_right) < -0.2
-        is_slight_right_turn = 0.3 < turn_direction < 0.8
-        is_slight_left_turn = -0.8 < turn_direction < -0.3
+        is_slight_left_turn =  turn_direction >0.3
+        is_slight_right_turn = turn_direction < -0.3
 
         ### SCENARIO 1: Front and Right obstacles → Reward LEFT turn
         # When obstacles are detected in front and to the right,
@@ -325,7 +325,7 @@ class Controller:
         # to return to the original trajectory (line)
         if right_side > SIDE_OBSTACLE and front_center < FRONT_CLEAR:
             if is_slight_right_turn and not self.is_on_edge:
-                fitness += reward * 5.0
+                fitness += reward * 6.0
                 if self.action_number%100==0:
                     print("Avoided right side obstacle, rewarding slight RIGHT turn")
                 # This helps the robot return to the line after avoiding obstacle
@@ -335,7 +335,7 @@ class Controller:
         # to return to the original trajectory (line)
         if left_side > SIDE_OBSTACLE and front_center < FRONT_CLEAR:
             if is_slight_left_turn and not self.is_on_edge:
-                fitness += reward * 5.0
+                fitness += reward * 6.0
                 if self.action_number%100==0:
                     print("Avoided left side obstacle, rewarding slight LEFT turn")
                 # This helps the robot return to the line after avoiding obstacle
