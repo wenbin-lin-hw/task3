@@ -145,8 +145,8 @@ class ImprovedSupervisorGA:
         self.emitter.send("real_speed: {}".format(self.real_speed).encode("utf-8"))
         
         pos = self.robot_node.getPosition()
-        # self.position = pos[0], pos[1]
-        # self.position_history.append([pos[0], pos[1]])
+        self.position = pos[0], pos[1]
+        self.position_history.append([pos[0], pos[1]])
         # up_distance = math.sqrt((self.position[0]-self.up_point[0])**2 + (self.position[1]-self.up_point[1])**2)
         # right_distance = math.sqrt((self.position[0]-self.right_point[0])**2 + (self.position[1]-self.right_point[1])**2)
         # down_distance = math.sqrt((self.position[0]-self.down_poin[0])**2 + (self.position[1]-self.down_poin[1])**2)
@@ -275,8 +275,23 @@ class ImprovedSupervisorGA:
                 # 评估基础适应度
                 fitness = self.evaluate_genotype(genotype, generation)
                 
-                # # 圆圈检测奖励
+                # # # 圆圈检测奖励
                 # circles = self.detect_circles()
+                # have_big_circle = False
+                # have_middle_circle = False
+                # for (length, (start_idx, end_idx)) in circles:
+                #     if length >=2.8:
+                #         have_big_circle = True
+                #         break
+                #     elif 2.0 <= length <2.8:
+                #         have_middle_circle = True
+                #         break
+                # if have_big_circle:
+                #     fitness += 0.1
+                # elif have_middle_circle:
+                #     fitness += 0.05
+                # else:
+                #     fitness -= 0.05
                 # print(circles)
                 # for (length, (start_idx, end_idx)) in circles:
                 #     print(length)

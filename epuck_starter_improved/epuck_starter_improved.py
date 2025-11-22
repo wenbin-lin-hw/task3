@@ -103,37 +103,63 @@ class Controller:
         self.position = 0,0
 
     def forwardFitness(self):
-        # 速度奖励（平滑）
-        speed_reward = self.real_speed # 使用tanh平滑
+        """
+        前进适应度函数
 
-        # 直线奖励
-        speed_diff = abs(self.velocity_left - self.velocity_right)
-        straightness = np.exp(-speed_diff)  # 指数衰减
+        参数:
+            left_speed: 左轮速度
+            right_speed: 右轮速度
+            max_speed: 最大速度
+        """
+        # 奖励机制
+        # 1. 两轮速度越快越好（鼓励快速移动）
+        speed_reward = (abs(self.velocity_left) + abs(self.velocity_right)) / (2 * self.max_speed)
 
-        # # 边界惩罚（渐进式）
-        # x, y = self.position
-        # max_dist = 0.67
-        # distance_from_center = np.sqrt(x ** 2 + y ** 2)
-        # # if self.action_number%20 == 0:
-        # #     print("distance_from_center:",distance_from_center)
-        # if distance_from_center > max_dist:
-        #     boundary_penalty = (distance_from_center - max_dist) / 0.1
-        #     boundary_penalty = min(boundary_penalty, 1.0)
+        # 2. 两轮速度差异越小越好（鼓励直线行驶）
+        speed_difference = abs(self.velocity_left - self.velocity_right) / self.max_speed
+        straightness_reward = 1.0 - speed_difference
+
+        # 3. 两轮都应该正向旋转（惩罚倒退）
+        direction_penalty = 0
+        if self.velocity_left < 0 or self.velocity_right < 0:
+            direction_penalty = 0.5
+
+        # 综合适应度
+        fitness = speed_reward * straightness_reward - direction_penalty
+        # if self.real_speed <0.005:
+        #     fitness = fitness-0.05
+        # print("real speed:",self.real_speed)
+        # # if self.is_on_edge:
+        # #     fitness = 0.0
+        # if self.real_speed>=0.07:
+        #     fitness = 1.0
+        # elif self.real_speed<0.07 and self.real_speed>=0.06:
+        #     fitness = 0.8
+        # elif self.real_speed<0.06 and self.real_speed>=0.05:
+        #     fitness = 0.6
+        # elif self.real_speed<0.05 and self.real_speed>=0.04:
+        #     fitness = 0.4
+        # elif self.real_speed<0.04 and self.real_speed>=0.02:
+        #     fitness = 0.2
+        # elif self.real_speed<0.02 and
+        #     fitness = 0.1
         # else:
-        #     boundary_penalty = 0.0
-        # max_y = 0.67
-        # if abs(y) > max_y:
-        #     boundary_penalty += (abs(y) - max_y) / 1.0
-        #     boundary_penalty = min(boundary_penalty, 1.0)
-        # max_x = 0.59
-        # if abs(x) > max_x:
-        #     boundary_penalty += (abs(x) - max_x) / 1.0
-        #     boundary_penalty = min(boundary_penalty, 1.0)
+        #     fitness = 0.0
+        # if self.real_speed < 0.01 and max(abs(self.velocity_left), abs(self.velocity_right)) > 0.5:
+        #     return 0.0
+        if  self.real_speed<0.01:
+            fitness -= 0.1
+        if self.is_on_edge:
+            # if self.action_number % 100 == 0:
+            #     print("is on the edge......")
+            fitness -=0.2
+        # if abs(self.velocity_right)!=0
+        #     if abs(self.velocity_left)/abs(self.velocity_right)>0.8 and self.velocity_right*self.velocity_left<0:
+        #         fitness=0.0
 
-        fitness = speed_reward * straightness
-        # if self.action_number%100 ==0:
-        #     print("forward fitness:",fitness,"speed_reward:",speed_reward,"straightness:",straightness)
-        return max(0, min(fitness,1.0))
+
+
+        return max(0, fitness)  # 确保适应度非负
 
     def followLineFitness(self):
         """
@@ -176,7 +202,7 @@ class Controller:
 
         # 4. 丢线惩罚
         lost_line_penalty = 0
-        if all(sensor > 500 for sensor in [left_sensor, right_sensor, center_sensor]):
+        if all(sensor > 500 for sensor in [left_sensor,right_sensor,center_sensor]):
             lost_line_penalty = 1.0  # 完全丢线
 
         # 综合适应度
@@ -184,38 +210,24 @@ class Controller:
                    correction_reward * 0.3 +
                    speed_reward * 0.3 -
                    lost_line_penalty)
-        if self.is_on_edge:
-            return 0.0
-        if self.real_speed<0.01:
-            return 0.0
-        # if self.action_number%100 ==0:
-        #     print("follow line fitness:",fitness,"line_detection_reward:",line_detection_reward,
-        #           "correction_reward:",correction_reward,"speed_reward:",speed_reward,
-        #           "lost_line_penalty:",lost_line_penalty)
         # if self.real_speed <0.005 and self.is_on_edge:
         #     fitness = 0.0
-        # if self.is_on_edge:
-        #     fitness = 0.0
+        if self.is_on_edge :
+            fitness = 0.0
 
-        # if self.real_speed < 0.01:
-        #     fitness -= 0.5
+        if self.real_speed<0.01:
+            fitness-=0.5
 
-        # if fitness <=0 and self.position[1]<0.2 and self.position[1]>-0.3 and self.position[0]>0:
-        #     fitness = 0.2-abs(self.position[0]-0.46)*(0.2/0.46)
-        # if fitness <=0 and self.position[1]<0.2 and self.position[1]>-0.3 and self.position[0]<0:
-        #     fitness = 0.2-abs(abs(self.position[0])-0.5)*(0.2/0.5)
-        # if fitness <= 0 and (self.position[1] >=0.2 or self.position[1]<-0.3):
-        #     x, y = self.position
-        #     distance_from_center = np.sqrt(x ** 2 + y ** 2)
-        #     fitness = 0.2 - abs(distance_from_center - 0.57) * (0.2 / 0.2)
-        # if self.action_number%100 ==0:
-        #     print("fitness:",fitness)
         # if self.real_speed < 0.01 and max(abs(self.velocity_left), abs(self.velocity_right)) > 0.5:
         #     fitness -= 0.2
         # if abs(self.velocity_right) != 0:
         #     if abs(self.velocity_left) / abs(
         #             self.velocity_right) > 0.8 and self.velocity_right * self.velocity_left < 0:
         #         fitness = 0.0
+
+
+
+
 
         return max(0, fitness)
 
@@ -254,8 +266,8 @@ class Controller:
         sensor_values = []
         for sensor in self.proximity_sensors:
             sensor_values.append(sensor.getValue())
-        proximity_sensors = sensor_values
-        left_speed, right_speed, danger_threshold = self.velocity_left, self.velocity_right, 90
+        proximity_sensors =sensor_values
+        left_speed, right_speed, danger_threshold = self.velocity_left,self.velocity_right,90
         if len(proximity_sensors) < 8:
             return 0.0
 
@@ -285,23 +297,23 @@ class Controller:
 
         # 碰撞惩罚
         if max_front > danger_threshold * 3:
-            return -1.0  # 严重碰撞
+            return 0.0  # 严重碰撞
 
         # 计算避障得分
         if max_front < danger_threshold:
             # 安全距离，高分
-            safety_score = 0.0
+            safety_score = 1.0
         else:
             # 有障碍物，根据距离评分
-            safety_score =  - (max_front - danger_threshold) / (danger_threshold * 2)
-            # safety_score = max(0.2, safety_score)
+            safety_score = 1.0 - (max_front - danger_threshold) / (danger_threshold * 2)
+            safety_score = max(0.2, safety_score)
 
         # 评估避障行为
         left_obstacle = proximity_sensors[7] > danger_threshold
         right_obstacle = proximity_sensors[0] > danger_threshold
 
-        avoidance_score = 1.0
-        if left_obstacle and right_speed < left_speed and left_speed - right_speed > 1.5:
+        avoidance_score = 0.0
+        if left_obstacle and right_speed < left_speed and left_speed-right_speed>1.5:
             # 左侧有障碍，应该右转（右轮慢）
             avoidance_score = 1.0
         elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 1.0:
@@ -322,60 +334,57 @@ class Controller:
         elif left_obstacle and right_speed < left_speed and left_speed - right_speed > 0.1:
             # 左侧有障碍，应该右转（右轮慢）
             avoidance_score = 0.1
-        if right_obstacle and left_speed < right_speed and right_speed - left_speed > 1.5:
+        if right_obstacle and left_speed < right_speed and right_speed-left_speed>1.5:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 1.0
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 1.0:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>1.0:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.7
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 0.8:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.8:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.6
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 0.6:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.6:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.4
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 0.4:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.4:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.3
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 0.2:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.2:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.2
-        elif right_obstacle and left_speed < right_speed and right_speed - left_speed > 0.1:
+        elif right_obstacle and left_speed < right_speed and right_speed-left_speed>0.1:
             # 右侧有障碍，应该左转（左轮慢）
             avoidance_score = 0.1
 
         # 鼓励在检测到障碍时减速
         if max_front > danger_threshold:
             avg_speed = (abs(left_speed) + abs(right_speed)) / 2.0
-            speed_reduction = 1.0 - min(avg_speed / self.max_speed, 1.0)
+            speed_reduction = 1.0 - min(avg_speed /self.max_speed, 1.0)
             avoidance_score *= (0.7 + 0.3 * speed_reduction)
-        if self.real_speed < 0.05:
-            avoidance_score = 0.0
-        # 综合得分
-        fitness = safety_score * 0.4 + avoidance_score * 2
-        # if self.is_on_edge:
-        #     fitness = 0.0
-        # if self.real_speed < 0.02 and max(abs(self.velocity_left), abs(self.velocity_right)) > 0.5:
-        #     fitness = 0.0
-        # if abs(self.velocity_right) != 0:
-        #     if abs(self.velocity_left) / abs(
-        #             self.velocity_right) > 0.8 and self.velocity_right * self.velocity_left < 0:
-        #         fitness = 0.0
-        # if self.is_on_edge:
-        #     fitness = 0.9
-        # x,y = self.position
-        # if abs(x)>0.62 or abs(y)>0.66:
-        #     fitness=0.9
 
-        return max(-1.0, fitness)
+        # 综合得分
+        fitness = safety_score * 0.6 + avoidance_score * 4
+        if self.is_on_edge:
+            fitness = 0.0
+        if self.real_speed<0.02 and max(abs(self.velocity_left), abs(self.velocity_right))>0.5:
+            fitness=0.0
+        if abs(self.velocity_right)!=0:
+            if abs(self.velocity_left)/abs(self.velocity_right)>0.8 and self.velocity_right*self.velocity_left<0:
+                fitness=0.0
+        if self.is_on_edge:
+            fitness =0.0
+
+        return max(0.0, fitness)
+
 
         # return np.clip(fitness, 0.0, 1.0)
+
 
     # ============================================================================
     # FITNESS FUNCTION 4: SPINNING FITNESS (PENALTY)
     # ============================================================================
 
-    def spinningFitness(self):
+    def spinningFitness(self) :
         """
         旋转惩罚函数
 
@@ -401,66 +410,66 @@ class Controller:
         """
         # 计算角速度（简化模型）
         # 正值表示逆时针旋转，负值表示顺时针旋转
-
-        # self.action_number += 1
-        # # if(self.action_number%30==0):
-        # #     print("self.velocity_left:",self.velocity_left,"self.velocity_right:",self.velocity_right)
-        left_speed, right_speed, angular_velocity_history = self.velocity_left, self.velocity_right, None
+        self.action_number +=1
+        # if(self.action_number%30==0):
+        #     print("self.velocity_left:",self.velocity_left,"self.velocity_right:",self.velocity_right)
+        left_speed, right_speed,angular_velocity_history=self.velocity_left,self.velocity_right,None
         angular_velocity = right_speed - left_speed
-        #
-        # # 检测原地旋转
-        # speed_sum = abs(left_speed) + abs(right_speed)
-        # speed_diff = abs(abs(left_speed) - abs(right_speed))
-        # if self.real_speed < 0.01:
+
+        # 检测原地旋转
+        speed_sum = abs(left_speed) + abs(right_speed)
+        speed_diff = abs(abs(left_speed) - abs(right_speed))
+        if self.real_speed < 0.0001:
+            return 0.0
+
+        if self.real_speed<0.01 and max(abs(self.velocity_left), abs(self.velocity_right))>0.5:
+            return 0.0
+        if abs(self.velocity_right)!=0:
+            if abs(self.velocity_left) / abs(self.velocity_right) > 0.8 and self.velocity_right * self.velocity_left < 0:
+                return 0.0
+
+
+        if speed_sum < 0.1:
+            # 几乎静止，不惩罚
+            return 1.0
+
+        # 原地旋转检测：速度相反且大小相近
+        if left_speed * right_speed < 0:  # 符号相反
+            similarity = 1.0 - speed_diff / (speed_sum + 1e-6)
+            if similarity > 0.8:
+                # 明显的原地旋转
+                spinning_penalty = similarity
+                return max(0.0,1.0 - spinning_penalty * 0.8)
+
+        # 检测振荡行为
+        if angular_velocity_history and len(angular_velocity_history) > 5:
+            recent_history = angular_velocity_history[-10:]
+
+            # 计算方向改变次数
+            direction_changes = 0
+            for i in range(1, len(recent_history)):
+                if recent_history[i] * recent_history[i - 1] < 0:
+                    direction_changes += 1
+
+            # 频繁改变方向表示振荡
+            if direction_changes > 5:
+                oscillation_penalty = min(direction_changes / 10.0, 0.6)
+                return max(0,1.0 - oscillation_penalty)
+
+
+        # if self.is_on_edge:
         #     return 0.0
-        #
-        # if self.real_speed < 0.01 and max(abs(self.velocity_left), abs(self.velocity_right)) > 0.5:
-        #     return 0.0
-        # if abs(self.velocity_right) != 0:
-        #     if abs(self.velocity_left) / abs(
-        #             self.velocity_right) > 0.8 and self.velocity_right * self.velocity_left < 0:
-        #         return 0.0
-        #
-        # if speed_sum < 0.1:
-        #     # 几乎静止，不惩罚
-        #     return 0.0
-        #
-        # # 原地旋转检测：速度相反且大小相近
-        # if left_speed * right_speed < 0:  # 符号相反
-        #     similarity = 1.0 - speed_diff / (speed_sum + 1e-6)
-        #     if similarity > 0.8:
-        #         # 明显的原地旋转
-        #         spinning_penalty = similarity
-        #         return -math.exp(-(spinning_penalty - 1)**2)
-        #
-        # # # 检测振荡行为
-        # # if angular_velocity_history and len(angular_velocity_history) > 5:
-        # #     recent_history = angular_velocity_history[-10:]
-        # #
-        # #     # 计算方向改变次数
-        # #     direction_changes = 0
-        # #     for i in range(1, len(recent_history)):
-        # #         if recent_history[i] * recent_history[i - 1] < 0:
-        # #             direction_changes += 1
-        # #
-        # #     # 频繁改变方向表示振荡
-        # #     if direction_changes > 5:
-        # #         oscillation_penalty = min(direction_changes / 10.0, 0.6)
-        # #         return max(-1.0, - oscillation_penalty)
-        #
-        # # if self.is_on_edge:
-        # #     return 0.0
-        # # print(max(abs(self.velocity_left), abs(self.velocity_right)))
-        # # 轻微转向不惩罚
-        turn_ratio = abs(angular_velocity) / (abs(self.velocity_left) +abs(self.velocity_right) + 1e-6)
+        # print(max(abs(self.velocity_left), abs(self.velocity_right)))
+        # 轻微转向不惩罚
+        turn_ratio = abs(angular_velocity) / (speed_sum + 1e-6)
 
         if turn_ratio < 0.3:
-            return 0.0
-        else:
-            return -(3*turn_ratio**2 - 2*turn_ratio**3)*0.3
+            return 1.0
+
+
 
         # 中等转向轻微惩罚
-        # return 1.0 - turn_ratio * 0.2
+        return max(0.0,1.0 - turn_ratio * 0.2)
 
     def check_for_new_genes(self):
         if (self.flagMessage == True):
@@ -557,6 +566,8 @@ class Controller:
 
         ### Define the fitness function to avoid spining behaviour
         spinningFitness = self.spinningFitness()
+        # if self.action_number%100 == 0:
+        #     print("Fitness Components - Forward: {:.3f}, Line: {:.3f}, Avoid Collision: {:.3f}, Spinning Penalty: {:.3f}".format(forwardFitness, followLineFitness, avoidCollisionFitness, spinningFitness))
         # if avoidCollisionFitness<0.0:
         #     print("avoidCollisionFitness negative:", avoidCollisionFitness)
         # if spinningFitness<0.0:
